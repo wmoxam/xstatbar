@@ -57,7 +57,7 @@ main (int argc, char *argv[])
    /* set defaults */
    x = 0;
    y = 0;
-   w = 1280;
+   w = 0;
    h = 13;
    font = "Fixed-6";
    time_fmt = "%a %d %b %Y %I:%M:%S %p";
@@ -232,11 +232,38 @@ setup_colors()
 	XftColorAllocValue(XINFO.disp, XINFO.vis, DefaultColormap( XINFO.disp, XINFO.screen ), &black, &COLOR_BLACK);
 }
 
+int
+calculate_width_of_default_screen()
+{
+	int nsizes;
+	XRRScreenSize* randrsize = XRRSizes(XINFO.disp, XINFO.screen, &nsizes);
+
+  if (nsizes != 0) {
+    Rotation current = 0;
+    XRRScreenConfiguration * sc;
+
+    sc = XRRGetScreenInfo (XINFO.disp, RootWindow (XINFO.disp, XINFO.screen));
+    int current_size = XRRConfigCurrentConfiguration (sc, &current);
+
+    if (current_size < nsizes) {
+
+      XRRRotations(XINFO.disp, XINFO.screen, &current);
+      randrsize += current_size;
+
+      bool rot = current & RR_Rotate_90 || current & RR_Rotate_270;
+      return rot ? randrsize->height : randrsize->width;
+		}
+  }
+  return DisplayWidth(XINFO.disp, XINFO.screen);
+}
+
 /* setup x window */
 void
 setup_x(int x, int y, int w, int h, const char *font)
 {
    XSetWindowAttributes x11_window_attributes;
+   Atom type;
+   unsigned long struts[12];
 
    /* open display */
    if (!(XINFO.disp = XOpenDisplay(NULL)))
@@ -244,10 +271,10 @@ setup_x(int x, int y, int w, int h, const char *font)
 
    /* setup various defaults/settings */
    XINFO.screen = DefaultScreen(XINFO.disp);
-   XINFO.width  = w;
    XINFO.height = h;
    XINFO.depth  = DefaultDepth(XINFO.disp, XINFO.screen);
    XINFO.vis    = DefaultVisual(XINFO.disp, XINFO.screen);
+   XINFO.width  = w ? w : calculate_width_of_default_screen();
 	 x11_window_attributes.override_redirect = 1;
 
    /* create window */
@@ -260,7 +287,26 @@ setup_x(int x, int y, int w, int h, const char *font)
       CWOverrideRedirect, &x11_window_attributes
    );
 
-   XINFO.backbuf = XdbeAllocateBackBufferName(XINFO.disp, XINFO.win, XdbeBackground);
+	 /* setup window manager hints */
+   type = XInternAtom(XINFO.disp, "_NET_WM_WINDOW_TYPE_DOCK", False);
+   XChangeProperty(XINFO.disp, XINFO.win, XInternAtom(XINFO.disp, "_NET_WM_WINDOW_TYPE", False),
+		   XA_ATOM, 32, PropModeReplace, (unsigned char*)&type, 1);
+   bzero(struts, sizeof(struts));
+   enum { left, right, top, bottom, left_start_y, left_end_y, right_start_y,
+	  right_end_y, top_start_x, top_end_x, bottom_start_x, bottom_end_x };
+   if (y <= DisplayHeight(XINFO.disp, XINFO.screen)/2) {
+	   struts[top] = y + XINFO.height;
+	   struts[top_start_x] = x;
+	   struts[top_end_x] = x + XINFO.width;
+   } else {
+	   struts[bottom] = DisplayHeight(XINFO.disp, XINFO.screen) - y;
+	   struts[bottom_start_x] = x;
+	   struts[bottom_end_x] = x + XINFO.width;
+   }
+   XChangeProperty(XINFO.disp, XINFO.win, XInternAtom(XINFO.disp, "_NET_WM_STRUT_PARTIAL", False),
+		   XA_CARDINAL, 32, PropModeReplace, (unsigned char*)struts, 12);
+
+	 XINFO.backbuf = XdbeAllocateBackBufferName(XINFO.disp, XINFO.win, XdbeBackground);
    XINFO.xftdraw = XftDrawCreate(XINFO.disp, XINFO.backbuf,
                                  DefaultVisual(XINFO.disp,XINFO.screen),
                                  DefaultColormap( XINFO.disp, XINFO.screen ) );
@@ -273,7 +319,8 @@ setup_x(int x, int y, int w, int h, const char *font)
    /* connect window to display */
    XMapWindow(XINFO.disp, XINFO.win);
 
-	 setup_colors();
+   XMoveWindow(XINFO.disp, XINFO.win, x, y);
+   setup_colors();
 }
 
 void
